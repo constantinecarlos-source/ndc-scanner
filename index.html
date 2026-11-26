@@ -1,13 +1,162 @@
 <!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#101b29"><link rel="manifest" href="manifest.json"><title>NDC Scanner · IV Pharmacy</title><style>
-*{box-sizing:border-box}body{margin:0;background:#101b29;color:#eef5fc;font:16px system-ui,sans-serif}main{max-width:720px;margin:auto;padding:24px 16px 60px}h1{font-size:30px;margin:4px 0}h2{font-size:20px}h3{font-size:16px;color:#8ce2d3;margin:0 0 8px}p{line-height:1.5}small,.muted{color:#aabbd0}section,article{background:#1b2a3b;border-radius:20px;padding:17px;margin:14px 0}button,input{font:inherit;border-radius:13px;padding:13px;border:1px solid #42566c}input{background:#101b29;color:white;width:100%;margin:8px 0}button{background:#83e1cf;color:#102b30;font-weight:700;cursor:pointer}button.secondary{background:#263b50;color:#eaf4ff}nav,.row{display:flex;gap:8px;flex-wrap:wrap}nav button{flex:1}a{color:#91e5d8}video{width:100%;border-radius:15px}details{margin:12px 0}summary{cursor:pointer;color:#b9d8f4}pre{white-space:pre-wrap;font:inherit;line-height:1.5} .warn{border-left:3px solid #f0b96b;padding-left:12px;color:#f8d5a4}.pill{font-size:12px;color:#83e1cf;letter-spacing:2px} [hidden]{display:none!important}</style></head><body><main><div class="pill">IV PHARMACY / HERRAMIENTA TÉCNICA</div><h1>NDC Scanner <small>V1.1</small></h1><div class="muted">Identifica el vial. Consulta su etiqueta oficial.</div><section><label for="q">NDC del empaque o nombre</label><input id="q" placeholder="Ej. 00409-7332-01" autocomplete="off"><div class="row"><button id="search">Consultar</button><button class="secondary" id="scan">▣ Escanear vial</button></div><p id="scanmsg" role="status" aria-live="polite"></p><button class="secondary" id="photoBtn">Tomar foto del código</button><input id="photo" type="file" accept="image/*" capture="environment" hidden><div id="camera" hidden><video id="video" playsinline muted></video><button id="stop" class="secondary">Cerrar cámara</button></div><small>Para GS1 DataMatrix, UPC y códigos lineales, según soporte del dispositivo. Confirma el NDC impreso.</small></section><nav><button class="secondary" id="history">Historial</button><button class="secondary" id="favorites">Favoritos</button><button class="secondary" id="install" hidden>Instalar</button></nav><p id="status" role="status"></p><div id="results"></div><section><h3>Calculadora auxiliar</h3><small>Usa exclusivamente concentraciones y volúmenes confirmados en la etiqueta y orden.</small><label>Dosis (mg)<input id="dose" type="number" min="0" inputmode="decimal"></label><label>Concentración reconstituida (mg/mL)<input id="conc" type="number" min="0" inputmode="decimal"></label><label>Volumen final real (mL)<input id="vol" type="number" min="0" inputmode="decimal"></label><label>Tiempo prescrito (min)<input id="mins" type="number" min="0" inputmode="decimal"></label><button id="calc">Calcular</button><p id="calcout" aria-live="polite"></p></section><p class="warn">Uso profesional auxiliar. No determina BUD USP &lt;797&gt;, compatibilidad Y-site ni sustituye la verificación farmacéutica. No introducir datos de pacientes. Las consultas requieren internet.</p></main><script>
-const $=id=>document.getElementById(id), el=(tag,t)=>{let e=document.createElement(tag);if(t)e.textContent=t;return e}, status=t=>$('status').textContent=t;let stream, timer, deferred;const store=(k)=>{try{return JSON.parse(localStorage.getItem(k)||'[]')}catch{return []}},save=(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v))}catch{}};function remember(k,q){save(k,[q,...store(k).filter(x=>x!==q)].slice(0,40))}function showList(k){$('results').replaceChildren();let a=el('section');a.append(el('h2',k==='fav'?'Favoritos':'Historial'));for(let q of store(k)){let b=el('button',q);b.className='secondary';b.onclick=()=>{$('q').value=q;lookup()};a.append(b,el('p',''))}if(!store(k).length)a.append(el('p','Sin registros todavía.'));$('results').append(a)}$('history').onclick=()=>showList('hist');$('favorites').onclick=()=>showList('fav');
-function normalize(q){let p=q.split('-');if(p.length===3){if(p.map(x=>x.length).join()==='5,4,2')return [q,p.join(''),p[0].replace(/^0/,'')+'-'+p[1]+'-'+p[2],p[0]+'-'+p[1].replace(/^0/,'')+'-'+p[2],p[0]+'-'+p[1]+'-'+p[2].replace(/^0/,'')];return [q]}if(/^\d{11}$/.test(q))return normalize(q.slice(0,5)+'-'+q.slice(5,9)+'-'+q.slice(9));return [q]}
-function validNdc(s){return /^\d{4,5}-\d{3,4}-\d{1,2}$/.test(s)&&[10,11].includes(s.replaceAll('-','').length)}
-async function lookup(){let q=$('q').value.trim();if(!q)return; $('results').replaceChildren();status('Consultando etiquetas FDA…');let numeric=/^[\d-]+$/.test(q), variants=normalize(q).filter(validNdc);if(numeric&&!variants.length){status('Introduce el NDC con guiones tal como aparece en el vial (o 11 dígitos). Un UPC no identifica inequívocamente un NDC.');return}let clean=q.replace(/["\\]/g,'');let expr=numeric?variants.map(x=>'openfda.package_ndc:"'+x+'"').join(' OR '):'(openfda.generic_name:"'+clean+'" OR openfda.brand_name:"'+clean+'")';try{let r=await fetch('https://api.fda.gov/drug/label.json?search='+encodeURIComponent(expr)+'&limit=20');if(!r.ok){if(r.status===404)throw Error('No se encontró etiqueta. Verifica el NDC o consulta DailyMed directamente.');throw Error('Servicio FDA no disponible ('+r.status+').')}let data=await r.json();let matches=data.results.filter(x=>!numeric||(x.openfda?.package_ndc||[]).some(n=>variants.includes(n)));if(!matches.length)throw Error('No hay coincidencia exacta de empaque.');remember('hist',q);status(matches.length+' etiqueta(s). Confirma fabricante, empaque y vía antes de usar.');for(let x of matches)render(x,q,numeric,variants)}catch(e){status(e.message);let a=el('a','Buscar directamente en DailyMed');a.href='https://dailymed.nlm.nih.gov/dailymed/search.cfm?query='+encodeURIComponent(q);a.target='_blank';$('results').append(a)}}
+*{box-sizing:border-box}body{margin:0;background:#101b29;color:#eef5fc;font:16px system-ui,sans-serif}main{max-width:720px;margin:auto;padding:24px 16px 60px}h1{font-size:30px;margin:4px 0}h2{font-size:20px}h3{font-size:16px;color:#8ce2d3;margin:0 0 8px}p{line-height:1.5}small,.muted{color:#aabbd0}section,article{background:#1b2a3b;border-radius:20px;padding:17px;margin:14px 0}button,input{font:inherit;border-radius:13px;padding:13px;border:1px solid #42566c}input{background:#101b29;color:white;width:100%;margin:8px 0}button{background:#83e1cf;color:#102b30;font-weight:700;cursor:pointer}button.secondary{background:#263b50;color:#eaf4ff}nav,.row{display:flex;gap:8px;flex-wrap:wrap}nav button{flex:1}a{color:#91e5d8}video{width:100%;border-radius:15px}details{margin:12px 0}summary{cursor:pointer;color:#b9d8f4}pre{white-space:pre-wrap;font:inherit;line-height:1.5} .warn{border-left:3px solid #f0b96b;padding-left:12px;color:#f8d5a4}.pill{font-size:12px;color:#83e1cf;letter-spacing:2px} [hidden]{display:none!important}</style></head><body><main><div class="pill">IV PHARMACY / HERRAMIENTA TÉCNICA</div><h1>NDC Scanner <small>V1.2</small></h1><div class="muted">Identifica el vial. Consulta su etiqueta oficial.</div><section><label for="q">NDC, código del empaque o nombre</label><input id="q" placeholder="Ej. 00409-7332-01" autocomplete="off"><div class="row"><button id="search">Consultar</button><button class="secondary" id="scan">▣ Escanear vial</button></div><p id="status" role="status" aria-live="polite"></p><p id="scanmsg" role="status" aria-live="polite"></p><button class="secondary" id="photoBtn">Tomar foto del código</button><input id="photo" type="file" accept="image/*" capture="environment" hidden><div id="camera" hidden><video id="video" playsinline muted></video><button id="stop" class="secondary">Cerrar cámara</button></div><small>Para GS1 DataMatrix, UPC y códigos lineales, según soporte del dispositivo. Confirma el NDC impreso.</small></section><nav><button class="secondary" id="history">Historial</button><button class="secondary" id="favorites">Favoritos</button><button class="secondary" id="install" hidden>Instalar</button></nav><div id="results"></div><section><h3>Calculadora auxiliar</h3><small>Usa exclusivamente concentraciones y volúmenes confirmados en la etiqueta y orden.</small><label>Dosis (mg)<input id="dose" type="number" min="0" inputmode="decimal"></label><label>Concentración reconstituida (mg/mL)<input id="conc" type="number" min="0" inputmode="decimal"></label><label>Volumen final real (mL)<input id="vol" type="number" min="0" inputmode="decimal"></label><label>Tiempo prescrito (min)<input id="mins" type="number" min="0" inputmode="decimal"></label><button id="calc">Calcular</button><p id="calcout" aria-live="polite"></p></section><p class="warn">Uso profesional auxiliar. No determina BUD USP &lt;797&gt;, compatibilidad Y-site ni sustituye la verificación farmacéutica. No introducir datos de pacientes. Las consultas requieren internet.</p></main><script>
+const $=id=>document.getElementById(id), el=(tag,t)=>{let e=document.createElement(tag);if(t)e.textContent=t;return e}, status=t=>$('status').textContent=t;let stream, timer, deferred, scannedValue;const store=(k)=>{try{return JSON.parse(localStorage.getItem(k)||'[]')}catch{return []}},save=(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v))}catch{}};function remember(k,q){save(k,[q,...store(k).filter(x=>x!==q)].slice(0,40))}function showList(k){$('results').replaceChildren();let a=el('section');a.append(el('h2',k==='fav'?'Favoritos':'Historial'));for(let q of store(k)){let b=el('button',q);b.className='secondary';b.onclick=()=>{scannedValue=undefined;$('q').value=q;lookup()};a.append(b,el('p',''))}if(!store(k).length)a.append(el('p','Sin registros todavía.'));$('results').append(a)}$('history').onclick=()=>showList('hist');$('favorites').onclick=()=>showList('fav');
+const ndcFormats = [[4, 4, 2], [5, 3, 2], [5, 4, 1]];
+
+function packageCandidates(value) {
+  const parts = value.split('-');
+  if (parts.length > 1) {
+    const shape = parts.map(part => part.length).join();
+    if (!parts.every(part => /^\d+$/.test(part))) return [];
+    if (ndcFormats.some(format => format.join() === shape)) return [value];
+    return shape === '5,4,2' ? packageCandidates(parts.join('')) : [];
+  }
+  if (/^\d{10}$/.test(value)) {
+    return ndcFormats.map(([labeler, product]) =>
+      [value.slice(0, labeler), value.slice(labeler, labeler + product),
+        value.slice(labeler + product)].join('-'));
+  }
+  if (!/^\d{11}$/.test(value)) return [];
+  const padded = [value.slice(0, 5), value.slice(5, 9), value.slice(9)];
+  return [padded.join('-'), ...padded.flatMap((part, index) => part.startsWith('0')
+    ? [padded.map((segment, i) => i === index ? segment.slice(1) : segment).join('-')]
+    : [])];
+}
+
+function validGtin(value) {
+  const digits = [...value].map(Number);
+  const check = digits.pop();
+  const total = digits.reverse().reduce((sum, digit, i) => sum + digit * (i % 2 ? 1 : 3), 0);
+  return (10 - total % 10) % 10 === check;
+}
+
+function packageQuery(value, scanned = false) {
+  // AI 01 supplies the GTIN. Leave GS1 lot, serial and expiry out of requests.
+  const code = value.replace(/^\](?:d2|C1|Q3)|^\x1d/i, '');
+  const ai = code.match(/^\(01\)(\d{14})(?!\d)/)
+    || code.match(/^01(\d{14})(?=$|\x1d|\(|\d{2})/);
+  if (ai || /^\d{12,14}$/.test(code)) {
+    const gtin = (ai ? ai[1] : code).padStart(14, '0');
+    if (!validGtin(gtin)) {
+      return { error: 'El dígito de control del código no coincide. Escanea de nuevo o escribe el NDC impreso.' };
+    }
+    if (!gtin.startsWith('003')) {
+      return { error: 'Este código no identifica un empaque individual con NDC reconocible. Escribe el NDC impreso o el nombre del medicamento.' };
+    }
+    return { candidates: packageCandidates(gtin.slice(3, -1)), gtin };
+  }
+  const ndc = code.replace(/^NDC\s*:?\s*/i, '').trim();
+  const candidates = packageCandidates(ndc);
+  if (candidates.length) return { candidates };
+  if (scanned || /^[\d\s-]+$/.test(ndc) || code !== value || /^\(\d+\)/.test(code)) {
+    return { error: 'No se pudo identificar un NDC en este código. Escribe el NDC impreso con guiones o el nombre del medicamento.' };
+  }
+  return {};
+}
+
+function dailyMedLink(query, text) {
+  const link = el('a', text);
+  link.href = 'https://dailymed.nlm.nih.gov/dailymed/search.cfm?query=' + encodeURIComponent(query);
+  link.target = '_blank';
+  link.rel = 'noopener';
+  return link;
+}
+
+async function fdaSearch(endpoint, expression) {
+  const response = await fetch('https://api.fda.gov/drug/' + endpoint + '.json?search='
+    + encodeURIComponent(expression) + '&limit=20', { signal: AbortSignal.timeout(12000) });
+  if (response.status === 404) return [];
+  if (!response.ok) throw Error('openFDA ' + response.status);
+  return (await response.json()).results || [];
+}
+
+function showDirectory(matches, candidates) {
+  for (const record of matches) {
+    const card = el('article');
+    card.append(el('h2', record.brand_name || record.generic_name || 'Directorio NDC de la FDA'),
+      el('p', 'Registrante: ' + (record.labeler_name || 'No indicado')),
+      el('p', 'Vía: ' + (record.route || []).join(', ')));
+    for (const item of record.packaging.filter(item => candidates.includes(item.package_ndc))) {
+      card.append(el('p', item.package_ndc + (item.description ? ' · ' + item.description : '')),
+        dailyMedLink(item.package_ndc, 'Buscar la etiqueta en DailyMed'));
+    }
+    $('results').append(card);
+  }
+}
+
+async function lookup() {
+  if ($('search').disabled) return;
+  const q = $('q').value.trim();
+  $('results').replaceChildren();
+  if (!q) return status('Escribe el NDC o el nombre del medicamento, o escanea el código.');
+  const { candidates, gtin, error } = packageQuery(q, q === scannedValue);
+  if (error) return status(error);
+  const clean = q.replace(/["\\]/g, '');
+  const expression = field => candidates.map(ndc => field + ':"' + ndc + '"').join(' OR ');
+  const labelExpression = candidates ? expression('openfda.package_ndc')
+    : '(openfda.generic_name:"' + clean + '" OR openfda.brand_name:"' + clean + '")';
+  $('search').disabled = true;
+  status('Buscando en openFDA…');
+  try {
+    const labels = await fdaSearch('label', labelExpression);
+    if ($('q').value.trim() !== q) return;
+    const matches = candidates
+      ? labels.filter(record => (record.openfda?.package_ndc || []).some(ndc => candidates.includes(ndc)))
+      : labels;
+    const packages = new Set(matches.flatMap(record => record.openfda?.package_ndc || [])
+      .filter(ndc => candidates?.includes(ndc)));
+    if (matches.length) {
+      if (packages.size > 1) return status('Hay más de un NDC posible. Escribe el NDC impreso con guiones.');
+      const historyQuery = packages.values().next().value || q;
+      remember('hist', historyQuery);
+      status(matches.length + ' etiqueta(s). Confirma el NDC y el empaque impresos.');
+      for (const record of matches) render(record, historyQuery, Boolean(candidates), candidates || []);
+      return;
+    }
+    if (candidates) {
+      const records = await fdaSearch('ndc', expression('packaging.package_ndc'));
+      if ($('q').value.trim() !== q) return;
+      const directory = records.filter(record =>
+        (record.packaging || []).some(item => candidates.includes(item.package_ndc)));
+      const codes = new Set(directory.flatMap(record => record.packaging.map(item => item.package_ndc))
+        .filter(ndc => candidates.includes(ndc)));
+      if (codes.size > 1) return status('Hay más de un NDC posible. Escribe el NDC impreso con guiones.');
+      if (directory.length) {
+        remember('hist', codes.values().next().value);
+        status('Empaque encontrado en el Directorio NDC. La etiqueta se puede buscar en DailyMed.');
+        showDirectory(directory, candidates);
+        return;
+      }
+    }
+    status(gtin ? 'Código leído. openFDA no encontró el empaque correspondiente. Verifica el NDC impreso.'
+      : 'openFDA no encontró una coincidencia. Verifica el NDC o busca en DailyMed.');
+  } catch {
+    if ($('q').value.trim() !== q) return;
+    status('No se pudo consultar openFDA. Vuelve a intentar o busca en DailyMed.');
+  } finally {
+    $('search').disabled = false;
+  }
+  if (!gtin && !candidates) $('results').append(dailyMedLink(q, 'Buscar directamente en DailyMed'));
+  for (const ndc of candidates || []) {
+    const line = el('p');
+    line.append(dailyMedLink(ndc, 'Buscar ' + ndc + ' en DailyMed'));
+    $('results').append(line);
+  }
+}
 const groups=[['Reconstitución',/reconstitut|reconstitution|sterile water|bacteriostatic water/i],['Dilución y soluciones',/dilut|compatible|sodium chloride|dextrose/i],['Administración IV',/infus|intravenous|minutes|mg\/min/i],['Estabilidad y almacenamiento',/stability|stable|refrigerat|storage|protect from light|room temperature|discard/i],['Alertas e incompatibilidades',/incompatib|do not mix|do not use|precipitat|preservative|single.dose/i]];
 function render(x,q,numeric,variants){let f=x.openfda||{},a=el('article');a.append(el('h2',(f.brand_name||f.generic_name||['Etiqueta'])[0]),el('p',(f.manufacturer_name||['Fabricante no disponible']).join(' · ')),el('p','Vía: '+(f.route||['No indicada']).join(', ')),el('p','NDC: '+(numeric?(f.package_ndc||[]).filter(n=>variants.includes(n)):(f.package_ndc||[])).join(', ')),el('small','Versión de etiqueta: '+(x.effective_time||'No indicada')));let b=el('button','☆ Guardar favorito');b.onclick=()=>{remember('fav',q);b.textContent='✓ Guardado'};a.append(el('p',''),b);let link=el('a','Abrir insert completo en DailyMed ↗');link.href=x.set_id?'https://dailymed.nlm.nih.gov/dailymed/drugInfo.cfm?setid='+encodeURIComponent(x.set_id):'https://dailymed.nlm.nih.gov/dailymed/search.cfm?query='+encodeURIComponent(q);link.target='_blank';let p=el('p');p.append(link);a.append(p,el('p','Extractos automáticos en inglés; pueden incluir varias presentaciones o indicaciones. No son instrucciones validadas para una dosis.'));let fields=['dosage_and_administration','dosage_forms_and_strengths','how_supplied','storage_and_handling','description','warnings_and_cautions','drug_interactions','preparation_and_administration','instructions_for_use'];let blocks=fields.flatMap(k=>(x[k]||[]).flatMap(t=>t.split(/\n+|(?<=[.!?])\s+(?=[A-Z])/).map(s=>({k,s:s.trim()})))).filter(o=>o.s);for(let [name,re] of groups){let s=el('section');s.append(el('h3',name));let hits=blocks.filter(o=>re.test(o.s));if(!hits.length)s.append(el('small','No identificado automáticamente. Consultar insert.'));else{for(let o of hits.slice(0,2))s.append(el('p',o.s));if(hits.length>2){let d=el('details');d.append(el('summary','Ver más extractos ('+(hits.length-2)+')'));for(let o of hits.slice(2))d.append(el('p',o.s));s.append(d)}}a.append(s)}let d=el('details');d.append(el('summary','Ver secciones originales completas'));for(let k of fields)if(x[k]){d.append(el('h3',k.replaceAll('_',' ')),el('pre',x[k].join('\n\n')))}a.append(d);$('results').append(a)}
 $('search').onclick=lookup;$('q').onkeydown=e=>{if(e.key==='Enter')lookup()};function stop(){clearInterval(timer);stream?.getTracks().forEach(t=>t.stop());$('camera').hidden=true}$('stop').onclick=stop;const scanmsg=t=>$('scanmsg').textContent=t;
-function readCode(raw){$('q').value=raw;scanmsg('Código leído: '+raw+'. Confirma el NDC impreso y escríbelo con sus guiones antes de consultar.');}
+$('q').oninput = () => { scannedValue = undefined; status(''); };
+
+function readCode(raw) {
+  const code = raw.trim();
+  const { gtin, error } = packageQuery(code, true);
+  scannedValue = gtin || code;
+  $('q').value = scannedValue;
+  $('results').replaceChildren();
+  status('');
+  scanmsg(error || 'Código leído. Toca Consultar para buscar el empaque.');
+}
 async function decoder(){if(window.BarcodeDetector){try{let f=await BarcodeDetector.getSupportedFormats();if(f.includes('data_matrix')&&f.includes('code_128')){let d=new BarcodeDetector({formats:f});return async img=>(await d.detect(img))[0]?.rawValue;}}catch{}}if(!window.ZXing){await new Promise((resolve,reject)=>{let s=document.createElement('script');s.src='https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js';s.onload=resolve;s.onerror=()=>reject(new Error('No se pudo cargar el lector alternativo. Revisa internet.'));document.head.appendChild(s);});}let reader=new ZXing.BrowserMultiFormatReader();let canvas=document.createElement('canvas');return async img=>{canvas.width=img.videoWidth||img.naturalWidth;canvas.height=img.videoHeight||img.naturalHeight;if(!canvas.width)return;canvas.getContext('2d').drawImage(img,0,0);try{return reader.decodeFromCanvas(canvas).getText()}catch{return undefined}};}
 $('photoBtn').onclick=()=>$('photo').click();$('photo').onchange=async()=>{let file=$('photo').files[0];if(!file)return;let url=URL.createObjectURL(file);try{scanmsg('Analizando foto…');let img=new Image();img.src=url;await img.decode();let decode=await decoder();let raw=await decode(img);if(raw)readCode(raw);else scanmsg('No se detectó código. Intenta otra foto enfocada o escribe el NDC.');}catch(e){scanmsg(e.message)}finally{URL.revokeObjectURL(url);$('photo').value=''}};
 $('scan').onclick=async()=>{stop();scanmsg('Solicitando acceso a la cámara…');if(!navigator.mediaDevices?.getUserMedia){scanmsg('Este navegador no permite cámara en vivo desde este archivo. Usa Tomar foto del código o abre la aplicación desde HTTPS.');return}try{stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}},audio:false});$('camera').hidden=false;$('video').srcObject=stream;await $('video').play();scanmsg('Cámara abierta. Cargando lector…');let decode=await decoder();scanmsg('Enfoca el código del vial.');let busy=false;timer=setInterval(async()=>{if(busy)return;busy=true;try{let raw=await decode($('video'));if(raw){stop();readCode(raw)}}catch(e){scanmsg('Error de lectura: '+e.message)}finally{busy=false}},450)}catch(e){stop();scanmsg('Cámara no disponible: '+e.name+' — '+e.message+'. Prueba Tomar foto del código o revisa permisos de Chrome.')}};
