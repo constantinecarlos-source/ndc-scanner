@@ -1,4 +1,4 @@
-const cacheName = 'ndc-v1.2';
+const cacheName = 'ndc-v1.3';
 const assets = ['./index.html', './manifest.json', './icon192.png', './icon512.png'];
 
 self.addEventListener('install', event => {
@@ -8,7 +8,8 @@ self.addEventListener('install', event => {
 });
 
 self.addEventListener('activate', event => {
-  event.waitUntil(caches.delete('ndc-v1').then(() => self.clients.claim()));
+  event.waitUntil(Promise.all(['ndc-v1', 'ndc-v1.2'].map(name => caches.delete(name)))
+    .then(() => self.clients.claim()));
 });
 
 self.addEventListener('fetch', event => {
